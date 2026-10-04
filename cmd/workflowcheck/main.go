@@ -170,9 +170,139 @@ func run(workflow string) error {
 			return fmt.Errorf("expected available specimen, got %s", fetched.Status)
 		}
 		return nil
+
+	case "backup-restore":
+		return checkBackupRestore(server.URL, client)
 	default:
 		return fmt.Errorf("unknown workflow %q", workflow)
 	}
+}
+
+func checkBackupRestore(sourceURL string, client *http.Client) error {
+	specimen, plan, err := completedPlanSetup(client, sourceURL)
+	if err != nil {
+		return err
+	}
+	if err := recordProgress(client, sourceURL, plan.ID, 45, "矩阵剥离"); err != nil {
+		return err
+	}
+
+	backup, err := rawRequest(client, http.MethodGet, sourceURL+"/workspace/export", nil)
+	if err != nil {
+		return err
+	}
+	var envelope struct {
+		FormatVersion int `json:"format_version"`
+		Specimens     []struct {
+			ID string `json:"id"`
+		} `json:"specimens"`
+		Plans []struct {
+			ID string `json:"id"`
+		} `json:"plans"`
+		Progress []struct {
+			PlanID  string `json:"plan_id"`
+			Percent int    `json:"percent"`
+		} `json:"progress"`
+	}
+	if err := json.Unmarshal(backup, &envelope); err != nil {
+		return err
+	}
+	if envelope.FormatVersion != 1 || len(envelope.Specimens) != 1 || len(envelope.Plans) != 1 || len(envelope.Progress) != 1 {
+		return fmt.Errorf("export package missing full business facts: %s", backup)
+	}
+
+	// Restore the backup into a brand-new, empty service instance.
+	target := httptest.NewServer(httpapi.NewRouter(station.New(repository.NewMemory())))
+	defer target.Close()
+	report, err := rawRequest(client, http.MethodPost, target.URL+"/workspace/import", backup)
+	if err != nil {
+		return fmt.Errorf("restore into empty service: %w", err)
+	}
+	var outcome struct {
+		Replaced  bool `json:"replaced"`
+		Unchanged bool `json:"unchanged"`
+		Specimens int  `json:"specimens"`
+		Plans     int  `json:"plans"`
+		Progress  int  `json:"progress"`
+	}
+	if err := json.Unmarshal(report, &outcome); err != nil {
+		return err
+	}
+	if !outcome.Replaced || outcome.Unchanged || outcome.Specimens != 1 || outcome.Plans != 1 || outcome.Progress != 1 {
+		return fmt.Errorf("restore should replace empty workspace, got %s", report)
+	}
+
+	var restoredPlan planSnapshot
+	if err := requestJSON(client, http.MethodGet, target.URL+"/plans/"+plan.ID, nil, http.StatusOK, &restoredPlan); err != nil {
+		return err
+	}
+	if restoredPlan.Plan.Status != "active" || len(restoredPlan.Progress) != 1 || restoredPlan.Progress[0].Percent != 45 {
+		return fmt.Errorf("restored plan snapshot inconsistent: %+v", restoredPlan)
+	}
+
+	// Importing the same backup again is an idempotent no-op while the
+	// target still matches the captured point in time.
+	repeat, err := rawRequest(client, http.MethodPost, target.URL+"/workspace/import", backup)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(repeat, &outcome); err != nil {
+		return err
+	}
+	if outcome.Replaced || !outcome.Unchanged {
+		return fmt.Errorf("repeated import must be an unchanged no-op, got %s", repeat)
+	}
+
+	// The preparation workflow continues under the same rules after restore.
+	if err := recordProgress(client, target.URL, plan.ID, 100, "表面加固"); err != nil {
+		return fmt.Errorf("continue preparation after restore: %w", err)
+	}
+	var restoredSpecimen specimenView
+	if err := requestJSON(client, http.MethodGet, target.URL+"/specimens/"+specimen.ID, nil, http.StatusOK, &restoredSpecimen); err != nil {
+		return err
+	}
+	if restoredSpecimen.Status != "stabilized" {
+		return fmt.Errorf("expected stabilized after restored completion, got %s", restoredSpecimen.Status)
+	}
+
+	// Corrupt content is rejected and never disturbs the restored data.
+	if _, err := rawRequest(client, http.MethodPost, target.URL+"/workspace/import", []byte("{broken")); err == nil {
+		return errors.New("corrupt import unexpectedly accepted")
+	}
+	if err := requestJSON(client, http.MethodGet, target.URL+"/specimens/"+specimen.ID, nil, http.StatusOK, &restoredSpecimen); err != nil {
+		return fmt.Errorf("workspace changed after failed import: %w", err)
+	}
+	if restoredSpecimen.Status != "stabilized" {
+		return fmt.Errorf("workspace status changed after failed import: %s", restoredSpecimen.Status)
+	}
+	return nil
+}
+
+func rawRequest(client *http.Client, method, url string, body []byte) ([]byte, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	request, err := http.NewRequest(method, url, reader)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return raw, fmt.Errorf("request %s %s returned %d: %s", method, url, response.StatusCode, string(raw))
+	}
+	return raw, nil
 }
 
 func registerSpecimen(client *http.Client, baseURL string) (specimenView, error) {

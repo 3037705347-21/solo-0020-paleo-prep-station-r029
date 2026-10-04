@@ -26,6 +26,10 @@
     {
       "workflow_id": "release-for-study",
       "command": "go run ./cmd/workflowcheck --workflow release-for-study"
+    },
+    {
+      "workflow_id": "backup-restore",
+      "command": "go run ./cmd/workflowcheck --workflow backup-restore"
     }
   ]
 }

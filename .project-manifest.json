@@ -27,12 +27,17 @@
     {
       "id": "domain",
       "path": "internal/domain",
-      "responsibility": "entities, invariants, and state transitions"
+      "responsibility": "entities, invariants, restore constructors, and state transitions"
+    },
+    {
+      "id": "workspace",
+      "path": "internal/workspace",
+      "responsibility": "portable workspace package format, strict decoding, and whole-state consistency validation"
     },
     {
       "id": "repository",
       "path": "internal/repository",
-      "responsibility": "mutex-protected in-memory persistence with atomic commits"
+      "responsibility": "mutex-protected in-memory persistence with atomic commits and whole-state replacement"
     },
     {
       "id": "contracts",
@@ -124,6 +129,30 @@
         "runtimecheck",
         "httpapi",
         "station",
+        "domain",
+        "repository",
+        "contracts"
+      ]
+    },
+    {
+      "id": "backup-restore",
+      "name": "Export and import workspace",
+      "entry": "GET /workspace/export + POST /workspace/import",
+      "steps": [
+        "export every business fact with format version and generation time",
+        "validate structure, references, open-plan relations, progress continuity and release uniqueness",
+        "replace the whole workspace only after the entire package validates",
+        "treat repeated imports of identical facts as idempotent no-ops"
+      ],
+      "success": "returns a replacement report and the restored queries and four workflows obey the same rules",
+      "failure": "rejects old, corrupt or inconsistent packages without touching the current workspace",
+      "verification": "workflowcheck exports a workspace, restores it into a fresh service, continues preparation, and retries corrupt imports",
+      "module_ids": [
+        "entrypoint",
+        "runtimecheck",
+        "httpapi",
+        "station",
+        "workspace",
         "domain",
         "repository",
         "contracts"

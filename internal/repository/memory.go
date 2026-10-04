@@ -161,6 +161,82 @@ func (m *Mutation) ReleaseForSpecimen(specimenID string) (domain.ReleaseRecord, 
 	return domain.ReleaseRecord{}, false
 }
 
+// ReplaceAll swaps the entire workspace inside an already-cloned mutation.
+// Commit only happens when the caller's Mutate closure returns nil, so a
+// rejected import can never partially overwrite the running state.
+func (m *Mutation) ReplaceAll(
+	specimens []domain.Specimen,
+	plans []domain.PrepPlan,
+	progress map[string][]domain.ProgressEntry,
+	releases []domain.ReleaseRecord,
+) {
+	next := state{
+		specimens: make(map[string]domain.Specimen, len(specimens)),
+		plans:     make(map[string]domain.PrepPlan, len(plans)),
+		progress:  make(map[string][]domain.ProgressEntry, len(progress)),
+		releases:  make(map[string]domain.ReleaseRecord, len(releases)),
+	}
+	for _, value := range specimens {
+		next.specimens[value.ID] = value
+	}
+	for _, value := range plans {
+		next.plans[value.ID] = value
+	}
+	for planID, values := range progress {
+		next.progress[planID] = append([]domain.ProgressEntry(nil), values...)
+	}
+	for _, value := range releases {
+		next.releases[value.ID] = value
+	}
+	m.state = next
+}
+
+// ListPlans returns every plan ordered by creation time and id.
+func (m *Mutation) ListPlans() []domain.PrepPlan {
+	values := make([]domain.PrepPlan, 0, len(m.state.plans))
+	for _, value := range m.state.plans {
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].CreatedAt.Equal(values[j].CreatedAt) {
+			return values[i].ID < values[j].ID
+		}
+		return values[i].CreatedAt.Before(values[j].CreatedAt)
+	})
+	return values
+}
+
+// ListProgressGroups returns progress entries grouped by plan id, ordered
+// inside each group by creation time and sequence.
+func (m *Mutation) ListProgressGroups() map[string][]domain.ProgressEntry {
+	groups := make(map[string][]domain.ProgressEntry, len(m.state.progress))
+	for planID := range m.state.progress {
+		groups[planID] = m.ProgressForPlan(planID)
+		sort.Slice(groups[planID], func(i, j int) bool {
+			if groups[planID][i].CreatedAt.Equal(groups[planID][j].CreatedAt) {
+				return groups[planID][i].Sequence < groups[planID][j].Sequence
+			}
+			return groups[planID][i].CreatedAt.Before(groups[planID][j].CreatedAt)
+		})
+	}
+	return groups
+}
+
+// ListReleases returns every release record ordered by creation time and id.
+func (m *Mutation) ListReleases() []domain.ReleaseRecord {
+	values := make([]domain.ReleaseRecord, 0, len(m.state.releases))
+	for _, value := range m.state.releases {
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].CreatedAt.Equal(values[j].CreatedAt) {
+			return values[i].ID < values[j].ID
+		}
+		return values[i].CreatedAt.Before(values[j].CreatedAt)
+	})
+	return values
+}
+
 func (m *Mutation) PutRelease(value domain.ReleaseRecord) {
 	m.state.releases[value.ID] = value
 }

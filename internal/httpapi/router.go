@@ -14,6 +14,8 @@ func NewRouter(service *station.Service) http.Handler {
 	api := &API{service: service}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
+	mux.HandleFunc("GET /workspace/export", api.exportWorkspace)
+	mux.HandleFunc("POST /workspace/import", api.importWorkspace)
 	mux.HandleFunc("GET /specimens", api.listSpecimens)
 	mux.HandleFunc("POST /specimens", api.registerSpecimen)
 	mux.HandleFunc("GET /specimens/{id}", api.getSpecimen)

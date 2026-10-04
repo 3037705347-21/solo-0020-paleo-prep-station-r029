@@ -6,11 +6,13 @@ import (
 	"net/http"
 
 	"example.com/paleo-prep-station/internal/contracts"
+	"example.com/paleo-prep-station/internal/workspace"
 )
 
 type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Issues  []workspace.Issue `json:"issues,omitempty"`
 }
 
 func writeError(w http.ResponseWriter, err error) {
@@ -25,6 +27,15 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusGatewayTimeout, errorBody{
 			Code:    "request_timeout",
 			Message: "请求处理超时",
+		})
+		return
+	}
+	var workspaceErr *workspace.PackageError
+	if errors.As(err, &workspaceErr) {
+		writeJSON(w, http.StatusBadRequest, errorBody{
+			Code:    workspaceErr.Code,
+			Message: workspaceErr.Message,
+			Issues:  workspaceErr.Issues,
 		})
 		return
 	}
